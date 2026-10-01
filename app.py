@@ -38,19 +38,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. INDEX SELECTOR ---
-selected_index = st.selectbox(
-    "Select Index",
-    ["SENSEX (BSE)", "NIFTY 50 (NSE)", "BANK NIFTY (NSE)"],
-    index=0
-)
+# --- 1. FULL INDEX SELECTOR ---
+INDEX_LIST = [
+    "SENSEX (BSE)",
+    "NIFTY 50 (NSE)",
+    "BANK NIFTY (NSE)",
+    "FIN NIFTY (NSE)",
+    "MIDCP NIFTY (NSE)",
+    "BANKEX (BSE)"
+]
+
+selected_index = st.selectbox("Select Index", INDEX_LIST, index=0)
 
 # --- 2. DATA PROVIDER ---
 @st.cache_data(ttl=5)
 def fetch_option_chain(index_name):
     """
     Returns (spot_price, dataframe, strike_interval)
-    Plug in your live broker API here for each index.
+    Replace these mock structures with your live broker API endpoint.
     """
     if "SENSEX" in index_name:
         spot = 72070.49
@@ -78,6 +83,42 @@ def fetch_option_chain(index_name):
             {"strike": 51400, "call_oi": 5100000, "call_ltp": 85.0, "put_oi": 1200000, "put_ltp": 490.0},
             {"strike": 51500, "call_oi": 6800000, "call_ltp": 50.0, "put_oi": 900000, "put_ltp": 610.0},
         ]
+    elif "FIN NIFTY" in index_name:
+        spot = 23850.00
+        step = 50
+        chain = [
+            {"strike": 23700, "call_oi": 450000, "call_ltp": 185.0, "put_oi": 2100000, "put_ltp": 35.0},
+            {"strike": 23750, "call_oi": 650000, "call_ltp": 145.0, "put_oi": 1800000, "put_ltp": 48.0},
+            {"strike": 23800, "call_oi": 1200000, "call_ltp": 110.0, "put_oi": 2400000, "put_ltp": 68.0},
+            {"strike": 23850, "call_oi": 1900000, "call_ltp": 78.0, "put_oi": 1700000, "put_ltp": 95.0},
+            {"strike": 23900, "call_oi": 3100000, "call_ltp": 52.0, "put_oi": 1100000, "put_ltp": 135.0},
+            {"strike": 23950, "call_oi": 2400000, "call_ltp": 32.0, "put_oi": 700000, "put_ltp": 180.0},
+            {"strike": 24000, "call_oi": 4200000, "call_ltp": 18.0, "put_oi": 400000, "put_ltp": 240.0},
+        ]
+    elif "MIDCP NIFTY" in index_name:
+        spot = 12900.00
+        step = 25
+        chain = [
+            {"strike": 12825, "call_oi": 300000, "call_ltp": 95.0, "put_oi": 1400000, "put_ltp": 18.0},
+            {"strike": 12850, "call_oi": 450000, "call_ltp": 76.0, "put_oi": 1800000, "put_ltp": 26.0},
+            {"strike": 12875, "call_oi": 780000, "call_ltp": 58.0, "put_oi": 1500000, "put_ltp": 38.0},
+            {"strike": 12900, "call_oi": 1600000, "call_ltp": 42.0, "put_oi": 1300000, "put_ltp": 52.0},
+            {"strike": 12925, "call_oi": 2100000, "call_ltp": 29.0, "put_oi": 800000, "put_ltp": 72.0},
+            {"strike": 12950, "call_oi": 2600000, "call_ltp": 19.0, "put_oi": 500000, "put_ltp": 98.0},
+            {"strike": 12975, "call_oi": 1900000, "call_ltp": 11.0, "put_oi": 250000, "put_ltp": 130.0},
+        ]
+    elif "BANKEX" in index_name:
+        spot = 58200.00
+        step = 100
+        chain = [
+            {"strike": 57900, "call_oi": 150000, "call_ltp": 380.0, "put_oi": 850000, "put_ltp": 95.0},
+            {"strike": 58000, "call_oi": 280000, "call_ltp": 310.0, "put_oi": 1200000, "put_ltp": 140.0},
+            {"strike": 58100, "call_oi": 490000, "call_ltp": 240.0, "put_oi": 950000, "put_ltp": 190.0},
+            {"strike": 58200, "call_oi": 950000, "call_ltp": 175.0, "put_oi": 850000, "put_ltp": 250.0},
+            {"strike": 58300, "call_oi": 1400000, "call_ltp": 120.0, "put_oi": 550000, "put_ltp": 330.0},
+            {"strike": 58400, "call_oi": 1700000, "call_ltp": 75.0, "put_oi": 350000, "put_ltp": 420.0},
+            {"strike": 58500, "call_oi": 2200000, "call_ltp": 45.0, "put_oi": 200000, "put_ltp": 530.0},
+        ]
     else:  # NIFTY 50
         spot = 24850.00
         step = 50
@@ -90,7 +131,7 @@ def fetch_option_chain(index_name):
             {"strike": 24950, "call_oi": 5600000, "call_ltp": 41.0, "put_oi": 1800000, "put_ltp": 205.0},
             {"strike": 25000, "call_oi": 9500000, "call_ltp": 25.0, "put_oi": 1400000, "put_ltp": 270.0},
         ]
-        
+
     df = pd.DataFrame(chain)
     df['strike'] = df['strike'].astype(int)
     return spot, df.sort_values(by="strike").reset_index(drop=True), step
@@ -103,11 +144,9 @@ total_put_oi = df['put_oi'].sum()
 total_call_oi = df['call_oi'].sum()
 pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi else 1.0
 
-# Highest OI Strikes
 support_strike = int(df.loc[df['put_oi'].idxmax()]['strike'])
 resistance_strike = int(df.loc[df['call_oi'].idxmax()]['strike'])
 
-# Recommendation Strategy
 is_bearish = pcr < 0.8
 rec_action = "BUY PUT (PE)" if is_bearish else "BUY CALL (CE)"
 target_strike = atm_strike
@@ -142,7 +181,10 @@ with c2:
     sentiment = "Bearish" if is_bearish else "Bullish"
     sent_color = "#ff6b6b" if is_bearish else "#51cf66"
     st.caption("Put-Call Ratio (PCR)")
-    st.subheader(f"{pcr}  :{sent_color}[● {sentiment}]")
+    st.markdown(
+        f"<h3 style='margin:0;'>{pcr} <span style='font-size:16px; color:{sent_color};'>● {sentiment}</span></h3>", 
+        unsafe_allow_html=True
+    )
 
 st.markdown("#### 🎯 Execution Plan")
 e1, e2, e3, e4 = st.columns(4)
@@ -161,47 +203,51 @@ st.markdown(
 # --- 5. OPEN INTEREST DISTRIBUTION CHART ---
 st.markdown("#### 📊 Open Interest Distribution")
 
-# Keep strike as string on x-axis for categorical spacing without dropping bars
-df['strike_label'] = df['strike'].astype(str)
+df['strike_str'] = df['strike'].astype(str)
 
 fig = go.Figure()
 
 fig.add_trace(go.Bar(
-    x=df['strike_label'],
+    x=df['strike_str'],
     y=df['call_oi'],
     name='Call OI (Resistance)',
     marker_color='#ff4d4d'
 ))
 
 fig.add_trace(go.Bar(
-    x=df['strike_label'],
+    x=df['strike_str'],
     y=df['put_oi'],
     name='Put OI (Support)',
     marker_color='#26a69a'
 ))
 
-# To avoid chart crash, map ATM strike label for the vertical marker
-atm_label = str(atm_strike)
-if atm_label in df['strike_label'].values:
-    fig.add_vline(
-        x=atm_label,
-        line_width=1.5,
-        line_dash="dash",
-        line_color="#f1c40f",
-        annotation_text=f"Spot: {spot:.0f}",
-        annotation_position="top left",
-        annotation_font_color="#f1c40f"
+# Safe categorical spot line using shapes instead of broken add_vline()
+atm_str = str(atm_strike)
+if atm_str in df['strike_str'].values:
+    idx = df['strike_str'].tolist().index(atm_str)
+    fig.add_shape(
+        type="line",
+        x0=idx, x1=idx,
+        y0=0, y1=1,
+        yref="paper",
+        line=dict(color="#f1c40f", width=1.5, dash="dash")
+    )
+    fig.add_annotation(
+        x=idx,
+        y=1,
+        yref="paper",
+        text=f"Spot: {spot:.0f}",
+        showarrow=False,
+        font=dict(color="#f1c40f", size=11),
+        yshift=10
     )
 
 fig.update_layout(
     barmode='group',
     template='plotly_dark',
     height=400,
-    margin=dict(l=10, r=10, t=30, b=20),
-    xaxis=dict(
-        type='category',
-        title="Strike"
-    ),
+    margin=dict(l=10, r=10, t=35, b=20),
+    xaxis=dict(type='category', title="Strike"),
     yaxis=dict(title="Open Interest"),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
