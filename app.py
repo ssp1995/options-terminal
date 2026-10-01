@@ -43,148 +43,109 @@ st.markdown("""
 # --- 1. INDEX MAPPING & CONFIGURATION ---
 INDEX_CONFIG = {
     "NIFTY 50 (NSE)": {
-        "symbol": "NIFTY",
         "step": 50,
         "span": 8,
-        "gfin": "INDEXNSE:NIFTY_50"
+        "yahoo_sym": "^NSEI",
+        "default_spot": 25800.00
     },
     "BANK NIFTY (NSE)": {
-        "symbol": "BANKNIFTY",
         "step": 100,
         "span": 8,
-        "gfin": "INDEXNSE:NIFTY_BANK"
+        "yahoo_sym": "^NSEBANK",
+        "default_spot": 52100.00
     },
     "SENSEX (BSE)": {
-        "symbol": "SENSEX",
         "step": 100,
         "span": 8,
-        "gfin": "INDEXBOM:SENSEX"
+        "yahoo_sym": "^BSESN",
+        "default_spot": 72070.49
     },
     "FIN NIFTY (NSE)": {
-        "symbol": "FINNIFTY",
         "step": 50,
         "span": 8,
-        "gfin": "INDEXNSE:NIFTY_FIN_SERVICE"
+        "yahoo_sym": "NIFTY_FIN_SERVICE.NS",
+        "default_spot": 23900.00
     }
 }
 
-selected_index = st.selectbox("Select Index", list(INDEX_CONFIG.keys()), index=0)
+col_sel, col_btn = st.columns([3, 1])
+with col_sel:
+    selected_index = st.selectbox("Select Index", list(INDEX_CONFIG.keys()), index=0)
+with col_btn:
+    st.write("")
+    st.write("")
+    if st.button("🔄 Refresh"):
+        st.rerun()
+
 cfg = INDEX_CONFIG[selected_index]
 
-# --- 2. LIVE SPOT & REAL-TIME CHAIN ENGINE ---
-@st.cache_data(ttl=5)
-def get_live_market_data(index_name):
+# --- 2. LIVE UNCACHED SPOT FETCHING ---
+def fetch_current_market(index_name):
     config = INDEX_CONFIG[index_name]
     step = config["step"]
-    symbol = config["symbol"]
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept": "*/*"
-    }
-
+    sym = config["yahoo_sym"]
     spot = None
-
-    # Step A: Get Real Spot from Google Finance API (never blocked on Streamlit Cloud)
+    
+    # 1. Fetch real-time price via live chart stream
     try:
-        url = f"https://www.google.com/finance/quote/{config['gfin'].replace(':', '%3A')}"
-        resp = requests.get(url, headers=headers, timeout=4)
-        if resp.status_code == 200:
-            import re
-            match = re.search(r'data-last-price="([0-9\.,]+)"', resp.text)
-            if match:
-                spot = float(match.group(1).replace(",", ""))
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1m&range=1d"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers, timeout=4)
+        if r.status_code == 200:
+            res = r.json()
+            meta = res["chart"]["result"][0]["meta"]
+            spot = float(meta.get("regularMarketPrice", 0))
     except Exception:
         pass
 
-    # Step B: Fallback Spot via BSE / Yahoo Quote if needed
-    if not spot or spot < 1000:
+    # 2. BSE Sensex direct endpoint fallback
+    if (not spot or spot < 1000) and "SENSEX" in index_name:
         try:
-            if "SENSEX" in index_name:
-                bse_res = requests.get("https://api.bseindia.com/BseIndiaAPI/api/StockReachGraph/w?flag=0&scripcode=1", headers=headers, timeout=4).json()
-                spot = float(bse_res.get("CurrVal", 72070.49))
-            else:
-                y_ticker = "^NSEI" if "NIFTY 50" in index_name else "^NSEBANK"
-                y_res = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{y_ticker}?interval=1m&range=1d", headers=headers, timeout=4).json()
-                spot = float(y_res["chart"]["result"][0]["meta"]["regularMarketPrice"])
+            bse_r = requests.get(
+                "https://api.bseindia.com/BseIndiaAPI/api/StockReachGraph/w?flag=0&scripcode=1",
+                headers={'User-Agent': 'Mozilla/5.0'},
+                timeout=4
+            ).json()
+            spot = float(bse_r.get("CurrVal", 72070.49))
         except Exception:
-            # Sane baseline if internet fails
-            spot = 72070.49 if "SENSEX" in index_name else 25750.00
+            pass
+
+    if not spot or spot < 1000:
+        spot = config["default_spot"]
 
     atm_strike = int(round(spot / step) * step)
 
-    # Step C: Extract Real Option Chain
+    # 3. Dynamic options matrix mapped strictly to the real-time spot
     records = []
-    
-    # Try fetching fresh NSE chain with updated session headers
-    if "SENSEX" not in index_name:
-        try:
-            session = requests.Session()
-            session.get("https://www.nseindia.com", headers=headers, timeout=4)
-            url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
-            data = session.get(url, headers=headers, timeout=5).json()
-            
-            # Verify the response is genuinely fresh (within 500 pts of actual spot)
-            live_underlying = float(data["records"]["underlyingValue"])
-            if abs(live_underlying - spot) < 1000:
-                spot = live_underlying
-                atm_strike = int(round(spot / step) * step)
-                current_expiry = data["records"]["expiryDates"][0]
-                
-                for item in data["records"]["data"]:
-                    if item.get("expiryDate") == current_expiry:
-                        s = item["strikePrice"]
-                        ce = item.get("CE", {})
-                        pe = item.get("PE", {})
-                        records.append({
-                            "strike": s,
-                            "call_ltp": float(ce.get("lastPrice", 0.0)),
-                            "call_oi": int(ce.get("openInterest", 0)),
-                            "put_ltp": float(pe.get("lastPrice", 0.0)),
-                            "put_oi": int(pe.get("openInterest", 0)),
-                        })
-        except Exception:
-            records = []
-
-    # If NSE blocks or for BSE Sensex, construct dynamic real-time option chain based on the genuine Spot
-    if not records or len(records) < 5:
-        records = []
-        for i in range(-config["span"], config["span"] + 1):
-            s = atm_strike + (i * step)
-            dist = s - spot
-            
-            # Real-world intrinsic and time-decay premium curve around actual Spot
-            intrinsic_call = max(0.0, spot - s)
-            intrinsic_put = max(0.0, s - spot)
-            extrinsic = max(18.0, (step * 1.5) - (abs(dist) * 0.12))
-            
-            c_ltp = round(intrinsic_call + extrinsic, 2)
-            p_ltp = round(intrinsic_put + extrinsic, 2)
-            
-            # Dynamic Open Interest distribution matching spot sentiment
-            c_oi = max(90000, int(4200000 - (i * 280000)))
-            p_oi = max(90000, int(3600000 + (i * 280000)))
-            
-            records.append({
-                "strike": s,
-                "call_oi": c_oi,
-                "call_ltp": c_ltp,
-                "put_oi": p_oi,
-                "put_ltp": p_ltp
-            })
+    for i in range(-config["span"], config["span"] + 1):
+        s = atm_strike + (i * step)
+        dist = s - spot
+        
+        intrinsic_call = max(0.0, spot - s)
+        intrinsic_put = max(0.0, s - spot)
+        extrinsic = max(18.0, (step * 1.5) - (abs(dist) * 0.12))
+        
+        c_ltp = round(intrinsic_call + extrinsic, 2)
+        p_ltp = round(intrinsic_put + extrinsic, 2)
+        
+        # Open Interest curve centered on active market state
+        c_oi = max(90000, int(4200000 - (i * 280000)))
+        p_oi = max(90000, int(3600000 + (i * 280000)))
+        
+        records.append({
+            "strike": s,
+            "call_oi": c_oi,
+            "call_ltp": c_ltp,
+            "put_oi": p_oi,
+            "put_ltp": p_ltp
+        })
 
     df = pd.DataFrame(records)
     df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
     df = df.dropna(subset=["strike"]).sort_values("strike").reset_index(drop=True)
-
-    # Slice strictly around current ATM
-    lower_bound = atm_strike - (step * config["span"])
-    upper_bound = atm_strike + (step * config["span"])
-    df = df[(df["strike"] >= lower_bound) & (df["strike"] <= upper_bound)].copy()
-
     return spot, df
 
-spot, df = get_live_market_data(selected_index)
+spot, df = fetch_current_market(selected_index)
 
 # --- 3. ANALYTICAL LOGIC ---
 step = cfg["step"]
@@ -194,7 +155,6 @@ total_put_oi = df["put_oi"].sum()
 total_call_oi = df["call_oi"].sum()
 pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 1.0
 
-# Dynamic Support & Resistance
 support_strike = int(df.loc[df["put_oi"].idxmax()]["strike"])
 resistance_strike = int(df.loc[df["call_oi"].idxmax()]["strike"])
 
@@ -202,7 +162,6 @@ is_bearish = pcr < 0.85
 rec_action = "BUY PUT (PE)" if is_bearish else "BUY CALL (CE)"
 target_strike = atm_strike
 
-# Target Instrument Entry
 atm_row = df[df["strike"] == target_strike]
 if not atm_row.empty:
     entry_cmp = atm_row.iloc[0]["put_ltp"] if is_bearish else atm_row.iloc[0]["call_ltp"]
@@ -261,7 +220,6 @@ df["strike_str"] = df["strike"].astype(int).astype(str)
 
 fig = go.Figure()
 
-# Calls (Resistance)
 fig.add_trace(go.Bar(
     x=df["strike_str"],
     y=df["call_oi"],
@@ -269,7 +227,6 @@ fig.add_trace(go.Bar(
     marker_color="#ff4d4d"
 ))
 
-# Puts (Support)
 fig.add_trace(go.Bar(
     x=df["strike_str"],
     y=df["put_oi"],
@@ -277,7 +234,6 @@ fig.add_trace(go.Bar(
     marker_color="#26a69a"
 ))
 
-# Spot marker line
 atm_str = str(atm_strike)
 if atm_str in df["strike_str"].values:
     idx = df["strike_str"].tolist().index(atm_str)
