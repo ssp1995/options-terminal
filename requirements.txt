@@ -1,8 +1,5 @@
 streamlit
-requests
 pandas
-numpy
+requests
 plotly
-scipy
-cloudscraper
-yfinance
+curl_cffi
